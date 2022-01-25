@@ -63,6 +63,17 @@ class AwsS3V3Adapter implements FilesystemAdapter
     /**
      * @var string[]
      */
+    public const MUP_AVAILABLE_OPTIONS = [
+        'before_upload',
+        'concurrency',
+        'mup_threshold',
+        'params',
+        'part_size',
+    ];
+
+    /**
+     * @var string[]
+     */
     private const EXTRA_METADATA_FIELDS = [
         'Metadata',
         'StorageClass',
@@ -160,14 +171,14 @@ class AwsS3V3Adapter implements FilesystemAdapter
         $key = $this->prefixer->prefixPath($path);
         $options = $this->createOptionsFromConfig($config);
         $acl = $options['ACL'] ?? $this->determineAcl($config);
-        $shouldDetermineMimetype = $body !== '' && ! array_key_exists('ContentType', $options);
+        $shouldDetermineMimetype = $body !== '' && ! array_key_exists('ContentType', $options['params']);
 
         if ($shouldDetermineMimetype && $mimeType = $this->mimeTypeDetector->detectMimeType($key, $body)) {
-            $options['ContentType'] = $mimeType;
+            $options['params']['ContentType'] = $mimeType;
         }
 
         try {
-            $this->client->upload($this->bucket, $key, $body, $acl, ['params' => $options]);
+            $this->client->upload($this->bucket, $key, $body, $acl, $options);
         } catch (Throwable $exception) {
             throw UnableToWriteFile::atLocation($path, '', $exception);
         }
@@ -182,9 +193,17 @@ class AwsS3V3Adapter implements FilesystemAdapter
 
     private function createOptionsFromConfig(Config $config): array
     {
-        $options = [];
+        $options = ['params' => []];
 
         foreach (static::AVAILABLE_OPTIONS as $option) {
+            $value = $config->get($option, '__NOT_SET__');
+
+            if ($value !== '__NOT_SET__') {
+                $options['params'][$option] = $value;
+            }
+        }
+
+        foreach (static::MUP_AVAILABLE_OPTIONS as $option) {
             $value = $config->get($option, '__NOT_SET__');
 
             if ($value !== '__NOT_SET__') {
@@ -309,7 +328,12 @@ class AwsS3V3Adapter implements FilesystemAdapter
         $lastModified = $dateTime instanceof DateTimeResult ? $dateTime->getTimeStamp() : null;
 
         return new FileAttributes(
-            $path, $fileSize, null, $lastModified, $mimetype, $this->extractExtraMetadata($metadata)
+            $path,
+            $fileSize,
+            null,
+            $lastModified,
+            $mimetype,
+            $this->extractExtraMetadata($metadata)
         );
     }
 
@@ -416,7 +440,7 @@ class AwsS3V3Adapter implements FilesystemAdapter
                 $this->bucket,
                 $this->prefixer->prefixPath($destination),
                 $this->visibility->visibilityToAcl($visibility),
-                $this->createOptionsFromConfig($config)
+                $this->createOptionsFromConfig($config)['params']
             );
         } catch (Throwable $exception) {
             throw UnableToCopyFile::fromLocationTo($source, $destination, $exception);
